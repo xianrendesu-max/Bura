@@ -4,7 +4,7 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: '/api/index.py',
+        destination: '/api/index.py', // すべての /api リクエストを Python へ
       },
     ];
   },
