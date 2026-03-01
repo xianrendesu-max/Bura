@@ -11,27 +11,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 自作の検索対象データベース
+# 自前の簡易データベース
 SEARCH_DATABASE = [
-    {"id": 1, "title": "MySearch プロジェクトについて", "url": "https://example.com/about", "content": "VercelとFastAPIで作られた次世代のプライベート検索エンジンです。"},
-    {"id": 2, "title": "DuckDuckGo APIの仕様", "url": "https://duckduckgo.com/api", "content": "Instant Answer APIを使用すると、Wikipediaなどの要約を即座に取得できます。"}
+    {"id": 1, "title": "MySearch 開発ガイド", "url": "https://example.com/docs", "content": "VercelとFastAPIを使って自分専用の検索エンジンを作る方法を解説します。"},
+    {"id": 2, "title": "Next.js 14 の新機能", "url": "https://nextjs.org/blog", "content": "App Routerやサーバーアクションなど、モダンなWeb開発の最新情報。"}
 ]
 
 def get_ddg_answer(query):
-    """DuckDuckGo Instant Answer APIを叩く"""
+    """DuckDuckGo APIから構造化データを取得"""
     try:
+        # format=json を指定することで解析しやすいデータを取得
         url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
         response = requests.get(url, timeout=3)
         data = response.json()
         
-        # Abstract（要約文）がある場合のみ抽出
+        # Abstract（要約）がある場合のみ返却
         if data.get("Abstract"):
             return {
                 "title": data.get("Heading"),
                 "url": data.get("AbstractURL"),
                 "content": data.get("Abstract"),
                 "source": data.get("AbstractSource", "Wikipedia"),
-                "image": data.get("Image") # 関連画像があれば取得
+                "image": data.get("Image") # 関連画像URL
             }
     except Exception:
         return None
@@ -42,14 +43,14 @@ def search(q: str = Query(None)):
     if not q:
         return {"results": [], "instant_answer": None}
     
-    # DDG APIから即答を取得
+    # DuckDuckGoから「即答」を取得
     instant_answer = get_ddg_answer(q)
     
     # 自前DBからキーワード検索
-    query = q.lower()
+    query_lower = q.lower()
     local_results = [
         item for item in SEARCH_DATABASE 
-        if query in item["title"].lower() or query in item["content"].lower()
+        if query_lower in item["title"].lower() or query_lower in item["content"].lower()
     ]
     
     return {
