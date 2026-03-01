@@ -2,11 +2,10 @@ from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 from bs4 import BeautifulSoup
-import concurrent.futures
+from urllib.parse import urljoin
 
 app = FastAPI()
 
-# フロントエンドからの通信を許可
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -14,75 +13,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 検索対象のシードURL（ここからデータを集める）
-TARGET_SITES = [
-    "https://news.yahoo.co.jp",
-    "https://www.watch.impress.co.jp",
-    "https://gigazine.net",
-    "https://qiita.com",
-    "https://b.hatena.ne.jp/hotentry/it"
-]
-
-# メモリ上の簡易データベース
+# メモリ上のデータベース（サーバーが再起動するとリセットされます）
 SEARCH_DATABASE = []
+# 重複クロール防止用
+INDEXED_URLS = set()
 
-def crawl_site(url):
-    """サイトからタイトルとリンクを抽出する簡易クローラー"""
+def crawl_url(url):
+    """指定されたURLを解析してデータベースに保存する"""
+    if url in INDEXED_URLS or len(INDEXED_URLS) > 100: # 無料枠制限のため100件まで
+        return
+    
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; MySearchBot/1.0)"}
         res = requests.get(url, headers=headers, timeout=5)
         res.encoding = res.apparent_encoding
         soup = BeautifulSoup(res.text, "html.parser")
         
-        extracted = []
-        # aタグからテキストとリンクを拾う
+        # ページタイトルの取得
+        page_title = soup.title.string if soup.title else url
+        
+        # ページ内のリンクを収集して「検索対象」にする
+        count = 0
         for a in soup.find_all("a", href=True):
-            title = a.get_text().strip()
-            link = a["href"]
+            link_text = a.get_text().strip()
+            link_url = urljoin(url, a["href"])
             
-            # 10文字以上の意味のあるテキストを持つリンクのみ採用
-            if len(title) > 10:
-                # 相対パスを絶対パスに変換
-                if link.startswith("/"):
-                    from urllib.parse import urljoin
-                    link = urljoin(url, link)
-                
-                if link.startswith("http"):
-                    extracted.append({
-                        "title": title,
-                        "url": link,
-                        "content": f"{url} の最新トピック: {title}"
-                    })
-        return extracted
+            if len(link_text) > 5 and link_url.startswith("http"):
+                SEARCH_DATABASE.append({
+                    "id": len(SEARCH_DATABASE),
+                    "title": link_text,
+                    "url": link_url,
+                    "source": page_title
+                })
+                count += 1
+        
+        INDEXED_URLS.add(url)
+        return count
     except Exception as e:
-        print(f"Error crawling {url}: {e}")
-        return []
+        print(f"Error: {e}")
+        return 0
 
-# サーバー起動時に一斉にクロールを実行
-print("Indexing sites...")
-with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-    all_pages = executor.map(crawl_site, TARGET_SITES)
-    for pages in all_pages:
-        for page in pages:
-            page["id"] = len(SEARCH_DATABASE)
-            SEARCH_DATABASE.append(page)
-print(f"Indexing complete. {len(SEARCH_DATABASE)} items loaded.")
-
+# 検索エンドポイント
 @app.get("/api/search")
 def search(q: str = Query(None)):
     if not q:
         return {"results": []}
     
     query = q.lower()
-    # タイトルまたはコンテンツにキーワードが含まれるものを抽出
+    # キーワードが含まれるものを検索
     results = [
         item for item in SEARCH_DATABASE 
-        if query in item["title"].lower() or query in item["content"].lower()
+        if query in item["title"].lower()
     ]
-    
-    # 最大30件を返す
-    return {"results": results[:30]}
+    return {"results": results[:50]}
 
-@app.get("/api/health")
-def health():
-    return {"status": "ok", "indexed_count": len(SEARCH_DATABASE)}
+# 🚀 新機能：URLを登録するエンドポイント
+@app.get("/api/add")
+def add_url(url: str):
+    new_count = crawl_url(url)
+    return {"message": f"Added {new_count} links from {url}", "total_indexed": len(SEARCH_DATABASE)}
