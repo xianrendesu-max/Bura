@@ -11,49 +11,51 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 自前の簡易データベース
-SEARCH_DATABASE = [
-    {"id": 1, "title": "MySearch 開発ガイド", "url": "https://example.com/docs", "content": "VercelとFastAPIを使って自分専用の検索エンジンを作る方法を解説します。"},
-    {"id": 2, "title": "Next.js 14 の新機能", "url": "https://nextjs.org/blog", "content": "App Routerやサーバーアクションなど、モダンなWeb開発の最新情報。"}
-]
-
-def get_ddg_answer(query):
-    """DuckDuckGo APIから構造化データを取得"""
+def get_ddg_data(query):
+    """DuckDuckGoから即答と、関連ウェブサイトを取得"""
     try:
-        # format=json を指定することで解析しやすいデータを取得
-        url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1&skip_disambig=1"
-        response = requests.get(url, timeout=3)
-        data = response.json()
+        url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1"
+        res = requests.get(url, timeout=3)
+        data = res.json()
         
-        # Abstract（要約）がある場合のみ返却
+        results = []
+        # RelatedTopicsからウェブサイトのリストを抽出
+        for topic in data.get("RelatedTopics", []):
+            if "FirstURL" in topic:
+                results.append({
+                    "title": topic.get("Text", "").split(" - ")[0],
+                    "url": topic.get("FirstURL"),
+                    "content": topic.get("Text")
+                })
+        
+        instant = None
         if data.get("Abstract"):
-            return {
+            instant = {
                 "title": data.get("Heading"),
                 "url": data.get("AbstractURL"),
                 "content": data.get("Abstract"),
                 "source": data.get("AbstractSource", "Wikipedia"),
-                "image": data.get("Image") # 関連画像URL
+                "image": data.get("Image")
             }
-    except Exception:
-        return None
-    return None
+            
+        return results, instant
+    except:
+        return [], None
 
 @app.get("/api/search")
 def search(q: str = Query(None)):
     if not q:
         return {"results": [], "instant_answer": None}
     
-    # DuckDuckGoから「即答」を取得
-    instant_answer = get_ddg_answer(q)
+    # DuckDuckGoから「サイトリスト」と「即答」を両方取得
+    web_results, instant_answer = get_ddg_data(q)
     
-    # 自前DBからキーワード検索
-    query_lower = q.lower()
+    # 自前のデータ（例：自分のブログなど）をここに追加可能
     local_results = [
-        item for item in SEARCH_DATABASE 
-        if query_lower in item["title"].lower() or query_lower in item["content"].lower()
+        {"title": f"{q} についての自作メモ", "url": "https://example.com/notes", "content": "これはローカルデータベースからの結果です。"}
     ]
     
     return {
-        "results": local_results,
+        "results": web_results + local_results, # サイトリストを合体
         "instant_answer": instant_answer
     }
