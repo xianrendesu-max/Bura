@@ -1,61 +1,41 @@
-from fastapi import FastAPI, Query
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Response, Query
 import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urljoin
+import uvicorn
 
 app = FastAPI()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-def get_ddg_data(query):
-    """DuckDuckGoから即答と、関連ウェブサイトを取得"""
+@app.get("/api/proxy")
+def proxy(url: str = Query(...)):
     try:
-        url = f"https://api.duckduckgo.com/?q={query}&format=json&no_html=1"
-        res = requests.get(url, timeout=3)
-        data = res.json()
+        # ユーザーエージェントを偽装してブロックを回避
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
         
-        results = []
-        # RelatedTopicsからウェブサイトのリストを抽出
-        for topic in data.get("RelatedTopics", []):
-            if "FirstURL" in topic:
-                results.append({
-                    "title": topic.get("Text", "").split(" - ")[0],
-                    "url": topic.get("FirstURL"),
-                    "content": topic.get("Text")
-                })
+        response = requests.get(url, headers=headers, timeout=15)
+        response.raise_for_status()
         
-        instant = None
-        if data.get("Abstract"):
-            instant = {
-                "title": data.get("Heading"),
-                "url": data.get("AbstractURL"),
-                "content": data.get("Abstract"),
-                "source": data.get("AbstractSource", "Wikipedia"),
-                "image": data.get("Image")
-            }
-            
-        return results, instant
-    except:
-        return [], None
+        # 文字コードの自動判定
+        response.encoding = response.apparent_encoding
+        
+        soup = BeautifulSoup(response.text, "html.parser")
 
-@app.get("/api/search")
-def search(q: str = Query(None)):
-    if not q:
-        return {"results": [], "instant_answer": None}
-    
-    # DuckDuckGoから「サイトリスト」と「即答」を両方取得
-    web_results, instant_answer = get_ddg_data(q)
-    
-    # 自前のデータ（例：自分のブログなど）をここに追加可能
-    local_results = [
-        {"title": f"{q} についての自作メモ", "url": "https://example.com/notes", "content": "これはローカルデータベースからの結果です。"}
-    ]
-    
-    return {
-        "results": web_results + local_results, # サイトリストを合体
-        "instant_answer": instant_answer
-    }
+        # 相対パス（/style.cssなど）を絶対パス（https://example.com/style.css）に置換
+        for tag in soup.find_all(['img', 'script', 'source', 'embed'], src=True):
+            tag['src'] = urljoin(url, tag['src'])
+            
+        for tag in soup.find_all(['a', 'link', 'area'], href=True):
+            # 内部リンクもプロキシを通すように書き換える場合はここを調整
+            tag['href'] = urljoin(url, tag['href'])
+
+        # レスポンスからセキュリティヘッダーを削除した状態でHTMLを返す
+        content = soup.prettify()
+        return Response(content=content, media_type="text/html")
+
+    except Exception as e:
+        return Response(content=f"<html><body><h1>Proxy Error</h1><p>{str(e)}</p></body></html>", status_code=500, media_type="text/html")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
