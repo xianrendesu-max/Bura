@@ -4,10 +4,10 @@ const nextConfig = {
     return [
       {
         source: '/api/:path*',
-        destination: '/api/index.py', // すべての /api リクエストを Python へ
+        destination: '/api/:path*',
       },
     ];
   },
 };
 
-export default nextConfig;
+module.exports = nextConfig;
